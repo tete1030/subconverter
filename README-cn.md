@@ -1407,6 +1407,12 @@ profile=profiles/example_profile.ini
 
 使用 `subconverter -g --artifact "test"` 启动本程序时，即可在程序根目录内仅生成上述示例中 `[test]` 文件块所指代的 `output.conf` 的配置文件文本。
 
+### Stash 可选 Tailnet 接入
+
+Clash 转换现在会保留基础 YAML 模板中的代理和策略组，再加入订阅转换出的节点。本地 `base/all_base.tpl` 可以用 `{% if default(request.tailnet, "0") == "1" %}` 按需生成 Stash 的 `type: tailscale` 代理、策略组以及所需的规则或 `hosts`。只给 Stash 的订阅 URL 加上 `&tailnet=1`。Headscale 地址和内部域名可直接留在本地模板中，无需新增 `pref.ini` 参数。
+
+带 `&tailnet=1` 的 Clash 请求会把模板规则放在外部规则集之前，即使外部配置设了 `overwrite_original_rules=true`；其他请求沿用原来的规则行为。`type: tailscale` 属于 Stash 专用字段，不适用于普通 Clash/Mihomo 客户端。
+
 ### 自动上传
 
 > 自动上传 gist ，可以用于 Clash For Android / Surge 等进行远程订阅

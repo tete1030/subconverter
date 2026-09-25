@@ -235,6 +235,18 @@ void proxyToClash(std::vector<Proxy> &nodes, YAML::Node &yamlnode, const ProxyGr
     YAML::Node proxies, original_groups;
     std::vector<Proxy> nodelist;
     string_array remarks_list;
+    const std::string proxy_field = ext.clash_new_field_name ? "proxies" : "Proxy";
+    const std::string group_field = ext.clash_new_field_name ? "proxy-groups" : "Proxy Group";
+
+    // Keep template-defined entries (for example, a Stash Tailnet proxy) alongside converted subscription nodes.
+    if(!ext.nodelist)
+    {
+        if(yamlnode[proxy_field].IsSequence())
+            proxies = yamlnode[proxy_field];
+        if(yamlnode[group_field].IsSequence())
+            original_groups = yamlnode[group_field];
+    }
+
     /// proxies style
     bool proxy_block = false, proxy_compact = false, group_block = false, group_compact = false;
     switch(hash_(ext.clash_proxies_style))
@@ -726,7 +738,19 @@ void proxyToClash(std::vector<Proxy> &nodes, YAML::Node &yamlnode, const ProxyGr
             singleproxy.SetStyle(YAML::EmitterStyle::Block);
         else
             singleproxy.SetStyle(YAML::EmitterStyle::Flow);
-        proxies.push_back(singleproxy);
+        const std::string proxy_name = singleproxy["name"].as<std::string>();
+        bool replaced = false;
+        for(size_t i = 0; i < proxies.size(); ++i)
+        {
+            if(safe_as<std::string>(proxies[i]["name"]) == proxy_name)
+            {
+                proxies[i] = singleproxy;
+                replaced = true;
+                break;
+            }
+        }
+        if(!replaced)
+            proxies.push_back(singleproxy);
         remarks_list.emplace_back(x.Remark);
         nodelist.emplace_back(x);
     }
@@ -742,10 +766,7 @@ void proxyToClash(std::vector<Proxy> &nodes, YAML::Node &yamlnode, const ProxyGr
         return;
     }
 
-    if(ext.clash_new_field_name)
-        yamlnode["proxies"] = proxies;
-    else
-        yamlnode["Proxy"] = proxies;
+    yamlnode[proxy_field] = proxies;
 
 
     for(const ProxyGroupConfig &x : extra_proxy_group)
@@ -820,10 +841,7 @@ void proxyToClash(std::vector<Proxy> &nodes, YAML::Node &yamlnode, const ProxyGr
     if(group_compact)
         original_groups.SetStyle(YAML::EmitterStyle::Flow);
 
-    if(ext.clash_new_field_name)
-        yamlnode["proxy-groups"] = original_groups;
-    else
-        yamlnode["Proxy Group"] = original_groups;
+    yamlnode[group_field] = original_groups;
 }
 
 std::string proxyToClash(std::vector<Proxy> &nodes, const std::string &base_conf, std::vector<RulesetContent> &ruleset_content_array, const ProxyGroupConfigs &extra_proxy_group, bool clashR, extra_settings &ext)

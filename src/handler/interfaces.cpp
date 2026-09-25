@@ -763,6 +763,9 @@ std::string subconverter(RESPONSE_CALLBACK_ARGS)
     {
     case "clash"_hash: case "clashr"_hash:
         writeLog(0, argTarget == "clashr" ? "Generate target: ClashR" : "Generate target: Clash", LOG_LEVEL_INFO);
+        // Keep request-scoped Tailnet rules from the base template ahead of shared rulesets.
+        if(argTarget == "clash" && getUrlArg(argument, "tailnet") == "1")
+            ext.overwrite_original_rules = false;
         tpl_args.local_vars["clash.new_field_name"] = ext.clash_new_field_name ? "true" : "false";
         response.headers["profile-update-interval"] = std::to_string(interval / 3600);
         if(ext.nodelist)

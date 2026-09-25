@@ -97,6 +97,12 @@ Finally subscribe this link in Clash and you are done!
 
 Please refer to [中文文档](https://github.com/metacubex/subconverter/blob/master/README-cn.md#%E8%BF%9B%E9%98%B6%E7%94%A8%E6%B3%95).
 
+### Optional Stash Tailnet support
+
+Clash conversion now retains proxies and proxy groups defined in its base YAML template alongside converted subscription nodes. A local `base/all_base.tpl` can use `{% if default(request.tailnet, "0") == "1" %}` to emit a Stash `type: tailscale` proxy, its group, and any desired rules or `hosts` entries. Add `&tailnet=1` only to the Stash subscription URL. The Headscale URL and local domains can stay in that local template; no new `pref.ini` keys are needed.
+
+On `&tailnet=1` Clash requests, template rules are retained ahead of external rulesets even if the external config sets `overwrite_original_rules=true`. Other requests keep their existing rule behavior. `type: tailscale` is Stash-specific and is not supported by generic Clash/Mihomo clients.
+
 ## Auto Upload
 
 > Upload Gist automatically
