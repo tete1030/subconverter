@@ -10,6 +10,10 @@ external-controller: {{ default(global.clash.external_controller, "127.0.0.1:909
 dns:
   enable: true
   listen: :1053
+  nameserver:
+  - 119.29.29.29
+  - 223.5.5.5
+  - system
 {% endif %}
 {% if local.clash.new_field_name == "true" %}
 proxies: ~
