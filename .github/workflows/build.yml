@@ -5,6 +5,11 @@ on:
     tags:
       - '**'
   workflow_dispatch:
+    inputs:
+      publish_ghcr:
+        description: Publish the reviewed logical-rule commit to its immutable GHCR tag
+        type: boolean
+        default: false
   pull_request:
 
 concurrency: 
@@ -13,6 +18,7 @@ concurrency:
 
 jobs:
   linux_build:
+    if: github.event_name != 'workflow_dispatch' || !inputs.publish_ghcr
     strategy:
       matrix:
         include:
@@ -54,6 +60,7 @@ jobs:
         draft: true
 
   macos_build:
+    if: github.event_name != 'workflow_dispatch' || !inputs.publish_ghcr
     strategy:
       matrix:
         include:
@@ -93,6 +100,7 @@ jobs:
         draft: true
   
   windows_build:
+    if: github.event_name != 'workflow_dispatch' || !inputs.publish_ghcr
     strategy:
       matrix:
         include:
@@ -146,3 +154,47 @@ jobs:
       with:
         files: ${{ matrix.artifact }}.7z
         draft: true
+
+  ghcr_reviewed_commit:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_ghcr && github.repository == 'tete1030/subconverter' && github.ref == 'refs/heads/feat/tailnet-support'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    concurrency:
+      group: ghcr-logical-rules-6d01c19504b5
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 6d01c19504b5bd8008a0e56cbab58faf9c24d99c
+      - name: Verify the exact reviewed source
+        run: test "$(git rev-parse HEAD)" = "6d01c19504b5bd8008a0e56cbab58faf9c24d99c"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and publish reviewed linux/amd64 image
+        id: image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: scripts/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/tete1030/subconverter:sha-6d01c19504b5bd8008a0e56cbab58faf9c24d99c
+          build-args: SHA=6d01c19504b5
+          labels: |
+            org.opencontainers.image.source=https://github.com/tete1030/subconverter
+            org.opencontainers.image.revision=6d01c19504b5bd8008a0e56cbab58faf9c24d99c
+      - name: Report published digest
+        run: echo "ghcr.io/tete1030/subconverter:sha-6d01c19504b5bd8008a0e56cbab58faf9c24d99c ${{ steps.image.outputs.digest }}"
+      - name: Verify the published artifact and logical conversion
+        run: |
+          image="ghcr.io/tete1030/subconverter@${{ steps.image.outputs.digest }}"
+          docker pull "$image"
+          test "$(docker image inspect --format '{{.Architecture}}/{{.Os}}' "$image")" = 'amd64/linux'
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")" = '6d01c19504b5bd8008a0e56cbab58faf9c24d99c'
+          python3 tests/verify_clash_logical_rules.py "$image" --output-dir "$RUNNER_TEMP/logical-output"
