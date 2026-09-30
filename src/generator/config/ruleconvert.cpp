@@ -122,6 +122,110 @@ static std::string transformRuleToCommon(string_view_array &temp, const std::str
     return strLine;
 }
 
+// PR #823 by RichardLuo0 proposed Clash logical rules. Keep recognition local
+// to the /sub ruleset path: other uses of ClashRuleTypes split on commas.
+static bool isClashLogicalType(std::string_view type)
+{
+    return type == "AND" || type == "OR" || type == "NOT";
+}
+
+// A logical expression is a parenthesized, comma-separated sequence of
+// parenthesized conditions. Check its structure before passing it to Mihomo.
+static bool validClashLogicalExpression(std::string_view expression, std::string_view type, unsigned depth = 0)
+{
+    if(depth > 16 || expression.size() < 4 || expression.front() != '(' || expression.back() != ')')
+        return false;
+
+    size_t pos = 1, children = 0;
+    const size_t end = expression.size() - 1;
+    while(pos < end)
+    {
+        if(expression[pos] != '(')
+            return false;
+        const size_t start = ++pos;
+        unsigned parentheses = 1;
+        while(pos < end && parentheses)
+        {
+            if(expression[pos] == '(')
+                ++parentheses;
+            else if(expression[pos] == ')')
+                --parentheses;
+            ++pos;
+        }
+        if(parentheses || pos <= start + 1)
+            return false;
+
+        const auto child = expression.substr(start, pos - start - 1);
+        const auto comma = child.find(',');
+        if(comma == std::string_view::npos || comma == 0 || comma + 1 == child.size())
+            return false;
+        if(isClashLogicalType(child.substr(0, comma)) &&
+           !validClashLogicalExpression(child.substr(comma + 1), child.substr(0, comma), depth + 1))
+            return false;
+
+        ++children;
+        if(pos < end)
+        {
+            if(expression[pos++] != ',' || pos == end)
+                return false;
+        }
+    }
+    return pos == end && (type == "NOT" ? children == 1 : children >= 2);
+}
+
+static bool transformClashRule(string_view_array &temp, const std::string &input,
+                               const std::string &group, std::string &output)
+{
+    const auto comma = input.find(',');
+    const auto type = std::string_view(input).substr(0, comma);
+    if(!isClashLogicalType(type))
+    {
+        output = transformRuleToCommon(temp, input, group);
+        return true;
+    }
+
+    if(comma == std::string::npos || comma + 1 >= input.size() || input[comma + 1] != '(')
+        return false;
+
+    unsigned parentheses = 0;
+    size_t end = comma + 1;
+    for(; end < input.size(); ++end)
+    {
+        if(input[end] == '(')
+            ++parentheses;
+        else if(input[end] == ')')
+        {
+            if(!parentheses)
+                return false;
+            if(--parentheses == 0)
+                break;
+        }
+    }
+    if(end == input.size() || parentheses ||
+       !validClashLogicalExpression(std::string_view(input).substr(comma + 1, end - comma), type))
+        return false;
+
+    // An existing policy in a source list is replaced by the ruleset policy,
+    // matching the behavior of ordinary rules. Never split nested conditions.
+    if(end + 1 < input.size())
+    {
+        if(input[end + 1] != ',' || end + 2 == input.size() || input.find(',', end + 2) != std::string::npos)
+            return false;
+    }
+    output = input.substr(0, end + 1) + "," + group;
+    return true;
+}
+
+static bool isClashRuleType(const std::string &line)
+{
+    const auto comma = line.find(',');
+    if(isClashLogicalType(std::string_view(line).substr(0, comma)))
+        return true;
+    return std::any_of(ClashRuleTypes.begin(), ClashRuleTypes.end(), [&line](const std::string &type) {
+        return line == type || startsWith(line, type + ",");
+    });
+}
+
 void rulesetToClash(YAML::Node &base_rule, std::vector<RulesetContent> &ruleset_content_array, bool overwrite_original_rules, bool new_field_name)
 {
     string_array allRules;
@@ -151,7 +255,13 @@ void rulesetToClash(YAML::Node &base_rule, std::vector<RulesetContent> &ruleset_
             strLine = retrieved_rules.substr(2);
             if(startsWith(strLine, "FINAL"))
                 strLine.replace(0, 5, "MATCH");
-            strLine = transformRuleToCommon(temp, strLine, rule_group);
+            std::string transformed;
+            if(!transformClashRule(temp, strLine, rule_group, transformed))
+            {
+                writeLog(0, "Ignoring malformed Clash logical rule in inline ruleset.", LOG_LEVEL_WARNING);
+                continue;
+            }
+            strLine = std::move(transformed);
             allRules.emplace_back(strLine);
             total_rules++;
             continue;
@@ -170,14 +280,20 @@ void rulesetToClash(YAML::Node &base_rule, std::vector<RulesetContent> &ruleset_
             lineSize = strLine.size();
             if(!lineSize || strLine[0] == ';' || strLine[0] == '#' || (lineSize >= 2 && strLine[0] == '/' && strLine[1] == '/')) //empty lines and comments are ignored
                 continue;
-            if(std::none_of(ClashRuleTypes.begin(), ClashRuleTypes.end(), [strLine](const std::string& type){return startsWith(strLine, type);}))
+            if(!isClashRuleType(strLine))
                 continue;
             if(strFind(strLine, "//"))
             {
                 strLine.erase(strLine.find("//"));
                 strLine = trimWhitespace(strLine);
             }
-            strLine = transformRuleToCommon(temp, strLine, rule_group);
+            std::string transformed;
+            if(!transformClashRule(temp, strLine, rule_group, transformed))
+            {
+                writeLog(0, "Ignoring malformed Clash logical rule in ruleset.", LOG_LEVEL_WARNING);
+                continue;
+            }
+            strLine = std::move(transformed);
             allRules.emplace_back(strLine);
         }
     }
@@ -222,7 +338,13 @@ std::string rulesetToClashStr(YAML::Node &base_rule, std::vector<RulesetContent>
             strLine = retrieved_rules.substr(2);
             if(startsWith(strLine, "FINAL"))
                 strLine.replace(0, 5, "MATCH");
-            strLine = transformRuleToCommon(temp, strLine, rule_group);
+            std::string transformed;
+            if(!transformClashRule(temp, strLine, rule_group, transformed))
+            {
+                writeLog(0, "Ignoring malformed Clash logical rule in inline ruleset.", LOG_LEVEL_WARNING);
+                continue;
+            }
+            strLine = std::move(transformed);
             output_content += "  - " + strLine + "\n";
             total_rules++;
             continue;
@@ -241,14 +363,20 @@ std::string rulesetToClashStr(YAML::Node &base_rule, std::vector<RulesetContent>
             lineSize = strLine.size();
             if(!lineSize || strLine[0] == ';' || strLine[0] == '#' || (lineSize >= 2 && strLine[0] == '/' && strLine[1] == '/')) //empty lines and comments are ignored
                 continue;
-            if(std::none_of(ClashRuleTypes.begin(), ClashRuleTypes.end(), [strLine](const std::string& type){ return startsWith(strLine, type); }))
+            if(!isClashRuleType(strLine))
                 continue;
             if(strFind(strLine, "//"))
             {
                 strLine.erase(strLine.find("//"));
                 strLine = trimWhitespace(strLine);
             }
-            strLine = transformRuleToCommon(temp, strLine, rule_group);
+            std::string transformed;
+            if(!transformClashRule(temp, strLine, rule_group, transformed))
+            {
+                writeLog(0, "Ignoring malformed Clash logical rule in ruleset.", LOG_LEVEL_WARNING);
+                continue;
+            }
+            strLine = std::move(transformed);
             output_content += "  - " + strLine + "\n";
             total_rules++;
         }
