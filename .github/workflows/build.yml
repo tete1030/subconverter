@@ -197,4 +197,25 @@ jobs:
           docker pull "$image"
           test "$(docker image inspect --format '{{.Architecture}}/{{.Os}}' "$image")" = 'amd64/linux'
           test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")" = '6d01c19504b5bd8008a0e56cbab58faf9c24d99c'
-          python3 tests/verify_clash_logical_rules.py "$image" --output-dir "$RUNNER_TEMP/logical-output"
+          # TemporaryDirectory is owner-only. With all capabilities removed,
+          # the container must use the runner UID to read its synthetic fixtures.
+          python3 - "$image" --output-dir "$RUNNER_TEMP/logical-output" <<'PYTHON'
+          import importlib.util, os, subprocess
+          spec = importlib.util.spec_from_file_location('logical', 'tests/verify_clash_logical_rules.py')
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          original = module.docker
+          def fixture_user(*args, **kwargs):
+              if args and args[0] == 'run':
+                  args = ('run', '--user=' + str(os.getuid()), *args[1:])
+              try:
+                  return original(*args, **kwargs)
+              except subprocess.CalledProcessError as error:
+                  print('Test command stderr:', error.stderr, flush=True)
+                  if args and args[0] == 'exec':
+                      logs = original('logs', args[1], check=False)
+                      print('Synthetic converter logs:', logs.stdout + logs.stderr, flush=True)
+                  raise
+          module.docker = fixture_user
+          module.main()
+          PYTHON
